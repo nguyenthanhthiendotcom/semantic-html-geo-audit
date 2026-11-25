@@ -149,17 +149,40 @@ def audit_html(html: str, target: str) -> dict[str, Any]:
         missing = sorted(core - parser.landmarks)
         checks.append({"status": "WARN", "rule": f"Missing core landmarks: {', '.join(missing)}"})
 
-    # 7. JSON-LD presence
+    # 7. JSON-LD & Entity @graph validation
     valid_blocks = 0
+    entity_types: set[str] = set()
+    entity_ids: set[str] = set()
     for raw in parser.jsonld_raw:
         try:
-            json.loads(raw)
+            data = json.loads(raw)
             valid_blocks += 1
+            nodes = data.get("@graph", [data]) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                t = node.get("@type")
+                if isinstance(t, str):
+                    entity_types.add(t)
+                elif isinstance(t, list):
+                    entity_types.update(str(x) for x in t)
+                if isinstance(node.get("@id"), str):
+                    entity_ids.add(node["@id"])
         except json.JSONDecodeError:
             pass
-    if valid_blocks > 0:
+
+    if valid_blocks > 0 and entity_ids:
         score += 15
-        checks.append({"status": "PASS", "rule": f"Valid JSON-LD blocks found: {valid_blocks}"})
+        checks.append({
+            "status": "PASS",
+            "rule": f"Connected JSON-LD Entity Graph ({valid_blocks} block(s), {len(entity_ids)} @id nodes, types: {', '.join(sorted(entity_types))})",
+        })
+    elif valid_blocks > 0:
+        score += 10
+        checks.append({
+            "status": "WARN",
+            "rule": f"Valid JSON-LD found ({valid_blocks} block(s)), but missing @id entity graph linking",
+        })
     else:
         checks.append({"status": "FAIL", "rule": "No valid JSON-LD structured data found"})
 
@@ -168,6 +191,8 @@ def audit_html(html: str, target: str) -> dict[str, Any]:
         "score": score,
         "checks": checks,
         "landmarks": sorted(parser.landmarks),
+        "entity_types": sorted(entity_types),
+        "entity_ids": sorted(entity_ids),
         "microdata_types": sorted(parser.microdata_types),
     }
 
@@ -186,8 +211,7 @@ def main() -> int:
     else:
         print("=== Semantic HTML5 & GEO Audit ===")
         print(f"Target: {report['target']}")
-        print(f"Score : {report['score']} / 100
-")
+        print(f"Score : {report['score']} / 100\n")
         for c in report["checks"]:
             print(f"[{c['status']}] {c['rule']}")
     return 0
